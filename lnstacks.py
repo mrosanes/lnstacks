@@ -24,11 +24,6 @@ import argparse
 # import joblib
 
 
-class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter,
-                      argparse.RawDescriptionHelpFormatter):
-    pass
-
-
 class MinusLnStack():
     """"Class created with the objective to apply
     the minus Napierian logarithm on many stacks
@@ -121,8 +116,7 @@ def main():
         description="Apply minus logarithm to: \n" +
                     "- A single stack \n" +
                     "- Many stacks situated in the same folder\n" +
-                    "It accepts hdf5 stacks and mrc stacks",
-        formatter_class=CustomFormatter)
+                    "It accepts hdf5 stacks and mrc stacks")
 
     parser.add_argument("input", type=str, default=None,
                         help="Input one of those:\n"
