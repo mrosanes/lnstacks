@@ -27,10 +27,16 @@ import os
 import glob
 import struct
 import argparse
+from argparse import RawTextHelpFormatter
 
 import h5py
 import numpy as np
 from joblib import Parallel, delayed
+
+
+class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter,
+                      argparse.RawDescriptionHelpFormatter):
+    pass
 
 
 def minus_ln_stack_h5(h5_stack_fn, tree="TomoNormalized",
@@ -192,7 +198,8 @@ def main():
         description="Apply minus logarithm to: \n" +
                     "- A single stack \n" +
                     "- Many stacks situated in the same folder\n" +
-                    "It accepts hdf5 stacks and mrc stacks")
+                    "It accepts hdf5 stacks and mrc stacks",
+        formatter_class=RawTextHelpFormatter)
 
     parser.add_argument("input", type=str, default=None,
                         help="Input one of those:\n"
