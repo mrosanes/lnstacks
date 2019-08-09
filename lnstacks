@@ -24,7 +24,6 @@ It can also be applied on individual hdf5/mrc stacks.
 Mainly used for processing Tomography projection image stacks, but it is
 a quite generic script."""
 
-
 import os
 import glob
 import struct
@@ -80,6 +79,7 @@ def minus_ln_stack_h5(h5_stack_fn, tree="TomoNormalized",
     h5_handler.close()
     h5_outfile.close()
     print("Minus logarithm applied on stack {}".format(h5_stack_fn))
+    return h5_outfile_fn
 
 
 def copy_metadata(h5_group, h5_grp_ln):
@@ -148,7 +148,7 @@ def minus_ln_stack_mrc(mrc_stack_fn, tree="TomoNormalized",
     n_frames = data_header[2]
 
     grp_ln.create_dataset(dataset, shape=(n_frames, n_rows, n_cols),
-                        chunks=(1, n_rows, n_cols), dtype='float32')
+                          chunks=(1, n_rows, n_cols), dtype='float32')
     grp_ln[dataset].attrs['Number of Frames'] = n_frames
     grp_ln[dataset].attrs['Number of Rows'] = n_rows
     grp_ln[dataset].attrs['Number of Columns'] = n_cols
@@ -172,27 +172,60 @@ def minus_ln_stack_mrc(mrc_stack_fn, tree="TomoNormalized",
     f.close()
     h5_outfile.close()
     print("Minus logarithm applied on stack {}".format(mrc_stack_fn))
+    return h5_outfile_fn
 
 
-def minus_ln_stack(stack_fn, tree="TomoNormalized",
+def minus_ln_stack(stack_fn, convert_mrc, tree="TomoNormalized",
                    dataset="TomoNormalized"):
     """Apply the minus log a hdf5/mrc stack"""
     ext = stack_fn.rsplit('.', 1)[1]
     if ext == "hdf5" or ext == "h5":
-        minus_ln_stack_h5(stack_fn, tree=tree, dataset=dataset)
+        h5_out_fn = minus_ln_stack_h5(stack_fn, tree=tree, dataset=dataset)
     elif ext == "mrc":
-        minus_ln_stack_mrc(stack_fn, tree=tree, dataset=dataset)
+        h5_out_fn = minus_ln_stack_mrc(stack_fn, tree=tree, dataset=dataset)
+
+    # Convert hdf5 output to mrc if indicated:
+    if convert_mrc:
+        convert_to_mrc_stack(h5_out_fn)
 
 
-def minus_ln_stacks_dir(directory):
+def minus_ln_stacks_dir(directory, convert_mrc):
     """Apply the minus Napierian logarithm to many stacks situated
     in the same directory. Parallelization applied: many stacks
     processed in parallel"""
 
     fnames = glob.glob(directory + "/*")
+    print("\nCompute absorbance stacks:\n"
+          "Applying minus log to the stacks in"
+          " the given directory:\n{0}\n".format(fnames))
+
     cores = -2
     Parallel(n_jobs=cores, backend="multiprocessing")(
-        delayed(minus_ln_stack)(filename) for filename in fnames)
+        delayed(minus_ln_stack)(filename, convert_mrc) for filename in fnames)
+
+
+def convert_to_mrc_stack(h5_stack_fname):
+    """Convert absorbance (-ln) stacks from hdf5 to mrc"""
+
+    raw_fname, _ = os.path.splitext(h5_stack_fname)
+    mrc_file = raw_fname + '.mrc'
+    image_convert = "scipion xmipp_image_convert"
+    tree_hdf5 = 'TomoNormalized/TomoNormalized@' + h5_stack_fname
+    command = image_convert + " -i " + tree_hdf5 + " -o " + mrc_file
+    os.system(command)
+
+    print("\nAbsorbance stack converted"
+          " from hdf5 to mrc: {0}".format(mrc_file))
+
+
+def convert_to_mrc_dir(directory):
+    print("\nConvert absorbance hdf5 stacks to mrc")
+    fnames = glob.glob(directory + "/*ln.hdf5")
+    cores = -2
+    print("")
+    Parallel(n_jobs=cores, backend="multiprocessing")(
+        delayed(convert_to_mrc_stack)(filename) for filename in fnames)
+    print(fnames)
 
 
 def main():
@@ -210,15 +243,19 @@ def main():
                              "  - File hdf5 (or mrc) stack, \n"
                              "  - Directory containing hdf5 (or mrc) stacks")
 
+    parser.add_argument('-m', '--mrc', type=int, default=1,
+                        help='Do not convert output h5 stacks to mrc (-m=0)\n'
+                             '(Default: -m=1)')
+
     args = parser.parse_args()
 
     if os.path.isfile(args.input):
-        print("Applying minus log to the given stack")
-        minus_ln_stack(args.input)
+        print("Applying minus log to {0} stack".format(args.input))
+        minus_ln_stack(args.input, args.mrc)
 
     elif os.path.isdir(args.input):
-        print("Applying minus log to the stacks in the given directory")
-        minus_ln_stacks_dir(args.input)
+        minus_ln_stacks_dir(args.input, args.mrc)
+    print("")
 
 
 if __name__ == "__main__":
