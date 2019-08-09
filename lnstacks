@@ -244,7 +244,7 @@ def main():
                              "  - Directory containing hdf5 (or mrc) stacks")
 
     parser.add_argument('-m', '--mrc', type=int, default=1,
-                        help='Do not convert output h5 stacks to mrc (-m=0)\n'
+                        help='Convert output h5 stacks to mrc\n'
                              '(Default: -m=1)')
 
     args = parser.parse_args()
