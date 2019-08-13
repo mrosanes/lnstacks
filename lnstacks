@@ -22,7 +22,7 @@ the transmittance stacks: apply minus Napierian logarithm to stacks.
 It can be applied to hdf5/mrc stacks situated on the same folder.
 It can also be applied on individual hdf5/mrc stacks.
 Mainly used for processing Tomography projection image stacks, but it is
-a quite generic script."""
+a generic script."""
 
 import os
 import glob
@@ -31,6 +31,7 @@ import argparse
 from argparse import RawTextHelpFormatter
 
 import h5py
+import mrcfile
 import numpy as np
 from joblib import Parallel, delayed
 
@@ -40,49 +41,27 @@ class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter,
     pass
 
 
-def minus_ln_stack_h5(h5_stack_fn, tree="TomoNormalized",
-                      dataset="TomoNormalized"):
-    """Minus Napierian logarithm applied to a hdf5 stack of images"""
-
-    if h5_stack_fn is None:
-        raise ValueError("Input stack cannot be None")
-
-    h5_handler = h5py.File(h5_stack_fn, "r")
-
-    h5_outfile_fn = h5_stack_fn.rsplit('.', 1)[0] + '_ln.hdf5'
-    h5_outfile = h5py.File(h5_outfile_fn, 'w')
-
-    h5_group = h5_handler[tree]
-
-    # Main Data
-    input_data_stack = h5_group[dataset]
-
-    # Shape information of data image stack
-    infoshape = input_data_stack.shape
-    n_frames = infoshape[0]
-    n_rows = infoshape[1]
-    n_cols = infoshape[2]
-
+def output_empty_hdf5(outfile_fn, n_frames, n_rows, n_cols, tree, dataset):
+    h5_outfile = h5py.File(outfile_fn, 'w')
     grp_ln = h5_outfile.create_group(tree)
-    copy_metadata(h5_group, grp_ln)
-
     grp_ln.create_dataset(dataset, shape=(n_frames, n_rows, n_cols),
                           chunks=(1, n_rows, n_cols), dtype='float32')
     grp_ln[dataset].attrs['Number of Frames'] = n_frames
     grp_ln[dataset].attrs['Number of Rows'] = n_rows
     grp_ln[dataset].attrs['Number of Columns'] = n_cols
-
-    for n_img in range(n_frames):
-        img = input_data_stack[n_img]
-        grp_ln[dataset][n_img] = -np.log(img)
-
-    h5_handler.close()
-    h5_outfile.close()
-    print("Minus logarithm applied on stack {}".format(h5_stack_fn))
-    return h5_outfile_fn
+    return h5_outfile, grp_ln
 
 
-def copy_metadata(h5_group, h5_grp_ln):
+def output_empty_mrc(outfile_fn, n_frames, n_rows, n_cols):
+    # Make a new, empty memory-mapped MRC file
+    mrc_outfile = mrcfile.new_mmap(outfile_fn,
+                                   shape=(n_frames, n_rows, n_cols),
+                                   mrc_mode=2,
+                                   overwrite=True)
+    return mrc_outfile
+
+
+def copy_h5_metadata(h5_group, h5_grp_ln):
     """Copy metadata to ln stack"""
 
     # Retrieving Angles
@@ -109,87 +88,91 @@ def copy_metadata(h5_group, h5_grp_ln):
         print("\nPixel size could NOT be extracted.")
 
 
-def minus_ln_stack_mrc(mrc_stack_fn, tree="TomoNormalized",
-                       dataset="TomoNormalized"):
-    """Read a little-endian .mrc file, apply the
-    minus Napierian logarithm and save as hdf5 file"""
+def minus_ln_stack_h5(h5_stack_fn, mrc_out,
+                      tree="TomoNormalized", dataset="TomoNormalized"):
+    """Minus Napierian logarithm applied to a hdf5 stack of images"""
 
-    # Note: If this function is giving problems, maybe it is because data had
-    # to be unpacked using big-endian instead of little endian.
+    h5_handler = h5py.File(h5_stack_fn, "r")
+    h5_group = h5_handler[tree]
 
-    # Note: created to unpack .mrc files containing floats32. It could be
-    # extended if we want to deal with .mrc files containing other
-    # data formats.
+    # Shape information of data image stack
+    infoshape = h5_group[dataset].shape
+    n_frames = infoshape[0]
+    n_rows = infoshape[1]
+    n_cols = infoshape[2]
 
-    # Info: MRC file format: http://bio3d.colorado.edu/imod/doc/mrc_format.txt
-    # HEADER of MRC file is 1024 bytes.
+    # Calculate absorbance (minus logarithm)
+    if mrc_out:
+        # Calculate absorbance (minus logarithm) stack and store on mrc
+        outfile_fn = h5_stack_fn.rsplit('.', 1)[0] + '_ln.mrc'
+        mrc_outfile = output_empty_mrc(outfile_fn, n_frames, n_rows, n_cols)
+        for n_img in range(n_frames):
+            img = h5_group[dataset][n_img]
+            mrc_outfile.data[n_img, :, :] = -np.log(img)
+        mrc_outfile.flush()
+        mrc_outfile.close()
+    else:
+        # Calculate absorbance (minus logarithm) stack and store on hdf5
+        outfile_fn = h5_stack_fn.rsplit('.', 1)[0] + '_ln.hdf5'
+        h5_outfile, grp_ln = output_empty_hdf5(
+            outfile_fn, n_frames, n_rows, n_cols, tree, dataset)
+        copy_h5_metadata(h5_group, grp_ln)
+        for n_img in range(n_frames):
+            img = h5_group[dataset][n_img]
+            # print(-np.log(img[20][25]))
+            grp_ln[dataset][n_img] = -np.log(img)
+        h5_outfile.close()
 
-    if mrc_stack_fn is None:
-        raise ValueError("Input stack cannot be None")
+    h5_handler.close()
 
-    h5_outfile_fn = mrc_stack_fn.rsplit('.', 1)[0] + '_ln.hdf5'
-    h5_outfile = h5py.File(h5_outfile_fn, 'w')
-    grp_ln = h5_outfile.create_group(tree)
+    print("Minus logarithm applied on stack {}".format(h5_stack_fn))
 
-    # We try for little-endian data
-    f = open(mrc_stack_fn, 'rb')
-    if f < 0:
-        print("mrc file could not be opened: " + mrc_stack_fn)
-    # Get the first 10 values, which are integers:
-    # nc nr ns mode ncstart nrstart nsstart nx ny nz
-    # nc: number of columns
-    # nr: number of rows
-    # ns: number of slices
-    # mode: format of image.
-    fa = f.read(40)
-    data_header = struct.unpack('<10I', fa)
-    n_cols = data_header[0]
-    n_rows = data_header[1]
-    n_frames = data_header[2]
 
-    grp_ln.create_dataset(dataset, shape=(n_frames, n_rows, n_cols),
-                          chunks=(1, n_rows, n_cols), dtype='float32')
-    grp_ln[dataset].attrs['Number of Frames'] = n_frames
-    grp_ln[dataset].attrs['Number of Rows'] = n_rows
-    grp_ln[dataset].attrs['Number of Columns'] = n_cols
+def minus_ln_stack_mrc(mrc_stack_fn, mrc_out,
+                       tree="TomoNormalized", dataset="TomoNormalized"):
 
-    # rest_header = 1024 - 40 = 984
-    # The rest of the header does not interest us.
-    subtract_header_len = 1024 - 40
-    f.read(subtract_header_len)
+    mrc_handler = mrcfile.open(mrc_stack_fn, mode='r')
 
-    single_img_size = n_cols * n_rows
-    image_bytes_len = 4 * n_cols * n_rows
+    infoshape = mrc_handler.data.shape
+    n_frames = infoshape[0]
+    n_rows = infoshape[1]
+    n_cols = infoshape[2]
 
-    for n_img in range(n_frames):
-        pixels_bytes = f.read(image_bytes_len)
-        format = '<' + str(single_img_size) + 'f'
-        img = struct.unpack(format, pixels_bytes)
-        img_ln = -np.log(img)
-        img_ln = np.reshape(img_ln, (1, n_rows, n_cols))
-        grp_ln[dataset][n_img] = img_ln
+    # Calculate absorbance (minus logarithm)
+    if mrc_out:
+        # Calculate absorbance (minus logarithm) stack and store on mrc
+        outfile_fn = mrc_stack_fn.rsplit('.', 1)[0] + '_ln.mrc'
+        mrc_outfile = output_empty_mrc(outfile_fn, n_frames, n_rows, n_cols)
+        for n_img in range(n_frames):
+            img = mrc_handler.data[n_img, :, :]
+            mrc_outfile.data[n_img, :, :] = -np.log(img)
+        mrc_outfile.flush()
+        mrc_outfile.close()
+    else:
+        # Calculate absorbance (minus logarithm) stack and store on hdf5
+        outfile_fn = mrc_stack_fn.rsplit('.', 1)[0] + '_ln.hdf5'
+        h5_outfile, grp_ln = output_empty_hdf5(
+            outfile_fn, n_frames, n_rows, n_cols, tree, dataset)
+        for n_img in range(n_frames):
+            img = mrc_handler.data[n_img, :, :]
+            grp_ln[dataset][n_img] = -np.log(img)
+        h5_outfile.close()
 
-    f.close()
-    h5_outfile.close()
     print("Minus logarithm applied on stack {}".format(mrc_stack_fn))
-    return h5_outfile_fn
 
 
-def minus_ln_stack(stack_fn, convert_mrc, tree="TomoNormalized",
-                   dataset="TomoNormalized"):
-    """Apply the minus log a hdf5/mrc stack"""
+def minus_ln_stack(stack_fn, mrc_out,
+                   tree="TomoNormalized", dataset="TomoNormalized"):
+    """Apply the minus log to a hdf5/mrc stack"""
     ext = stack_fn.rsplit('.', 1)[1]
     if ext == "hdf5" or ext == "h5":
-        h5_out_fn = minus_ln_stack_h5(stack_fn, tree=tree, dataset=dataset)
+        minus_ln_stack_h5(stack_fn, mrc_out, tree=tree, dataset=dataset)
     elif ext == "mrc":
-        h5_out_fn = minus_ln_stack_mrc(stack_fn, tree=tree, dataset=dataset)
-
-    # Convert hdf5 output to mrc if indicated:
-    if convert_mrc:
-        convert_to_mrc_stack(h5_out_fn)
+        minus_ln_stack_mrc(stack_fn, mrc_out, tree=tree, dataset=dataset)
 
 
-def minus_ln_stacks_dir(directory, convert_mrc):
+def minus_ln_stacks_dir(directory, mrc_out, tree="TomoNormalized",
+                   dataset="TomoNormalized"):
     """Apply the minus Napierian logarithm to many stacks situated
     in the same directory. Parallelization applied: many stacks
     processed in parallel"""
@@ -201,31 +184,8 @@ def minus_ln_stacks_dir(directory, convert_mrc):
 
     cores = -2
     Parallel(n_jobs=cores, backend="multiprocessing")(
-        delayed(minus_ln_stack)(filename, convert_mrc) for filename in fnames)
-
-
-def convert_to_mrc_stack(h5_stack_fname):
-    """Convert absorbance (-ln) stacks from hdf5 to mrc"""
-
-    raw_fname, _ = os.path.splitext(h5_stack_fname)
-    mrc_file = raw_fname + '.mrc'
-    image_convert = "scipion xmipp_image_convert"
-    tree_hdf5 = 'TomoNormalized/TomoNormalized@' + h5_stack_fname
-    command = image_convert + " -i " + tree_hdf5 + " -o " + mrc_file
-    os.system(command)
-
-    print("\nAbsorbance stack converted"
-          " from hdf5 to mrc: {0}".format(mrc_file))
-
-
-def convert_to_mrc_dir(directory):
-    print("\nConvert absorbance hdf5 stacks to mrc")
-    fnames = glob.glob(directory + "/*ln.hdf5")
-    cores = -2
-    print("")
-    Parallel(n_jobs=cores, backend="multiprocessing")(
-        delayed(convert_to_mrc_stack)(filename) for filename in fnames)
-    print(fnames)
+        delayed(minus_ln_stack)(filename, mrc_out,
+                                tree, dataset) for filename in fnames)
 
 
 def main():
@@ -244,8 +204,8 @@ def main():
                              "  - Directory containing hdf5 (or mrc) stacks")
 
     parser.add_argument('-m', '--mrc', type=int, default=1,
-                        help='Convert output h5 stacks to mrc\n'
-                             '(Default: -m=1)')
+                        help='Output stack in mrc: -m=1 (default)\n'
+                             'Output stack in hdf5: -m=0')
 
     args = parser.parse_args()
 
